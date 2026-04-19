@@ -7,6 +7,11 @@ build/
 venv/
 .venv/
 
+
+# FFmpeg binaries (Release only)
+ffmpeg/
+
+
 # Uygulama çıktıları
 medya_analiz.xlsx
 SorunluDosyalar/
