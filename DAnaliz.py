@@ -65,8 +65,15 @@ FFPROBE_PATH = resolve_ffprobe_path()
 
 # ================== VIDEO ANALİZ ==================
 def get_video_info(filepath):
+    """(codec, çözünürlük, süre, bozuk, ölçülemedi) döndürür.
+
+    "Bozuk" ile "ölçülemedi" AYRI şeylerdir: ilkinde ffprobe dosyayı
+    okumuş ve reddetmiştir, ikincisinde ffprobe hiç çalışmamıştır.
+    Ölçülemeyen dosya bozuk sayılıp SorunluDosyalar'a TAŞINMAMALIDIR —
+    ffprobe kurulu olmayan bir makinede sağlam videolar yerinden oynar.
+    """
     if not FFPROBE_PATH:
-        return "", "", 0, True
+        return "", "", 0, False, True
 
     try:
         cmd = [
@@ -83,23 +90,25 @@ def get_video_info(filepath):
 
         result = subprocess.run(cmd, check=False, **run_kwargs)
         if result.returncode != 0:
-            return "", "", 0, True
+            return "", "", 0, True, False
 
         lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         if len(lines) < 4:
-            return "", "", 0, True
+            return "", "", 0, True, False
 
         codec, w, h, d = lines[:4]
         try:
             duration = float(d)
         except ValueError:
-            return codec, f"{w}x{h}", 0, True
+            return codec, f"{w}x{h}", 0, True, False
 
         if duration <= 0:
-            return codec, f"{w}x{h}", 0, True
-        return codec, f"{w}x{h}", round(duration, 2), False
+            return codec, f"{w}x{h}", 0, True, False
+        return codec, f"{w}x{h}", round(duration, 2), False, False
     except (OSError, ValueError, TypeError):
-        return "", "", 0, True
+        # ffprobe bulundu ama çalıştırılamadı — bu bizim eksiğimiz,
+        # dosyanın kusuru değil. Ölçülemedi say.
+        return "", "", 0, False, True
 
 # ================== HASH ==================
 def get_hash(path):
@@ -168,6 +177,7 @@ def _analiz_worker():
     safe_ui_call(lambda: status.set("Analiz başladı…"))
 
     bozuk_var = False
+    olculemeyen = 0
 
     for index, path in enumerate(all_files, start=1):
         safe_ui_call(lambda idx=index: progress.configure(value=idx))
@@ -188,6 +198,7 @@ def _analiz_worker():
         coz = ""
         sure = 0
         bozuk = stat.st_size == 0
+        olculemedi = False
 
         is_video = ext.endswith(VIDEO_EXT)
         is_image = ext.endswith(IMAGE_EXT)
@@ -196,7 +207,15 @@ def _analiz_worker():
 
         if is_video:
             tur = "Video"
-            codec, coz, sure, bozuk = get_video_info(path)
+            codec, coz, sure, video_bozuk, olculemedi = get_video_info(path)
+            if olculemedi:
+                # Boyutu sıfır olan dosya ffprobe olmadan da bozuk; onu
+                # "ölçülemedi" diye saymak uyarı sayısını şişirir.
+                if not bozuk:
+                    olculemeyen += 1
+            else:
+                # Boyutu sıfır olan dosya zaten bozuk; ölçüm onu aklamaz.
+                bozuk = bozuk or video_bozuk
         elif is_image:
             tur = "Görsel"
         elif is_audio:
@@ -246,7 +265,7 @@ def _analiz_worker():
                 "Çözünürlük": coz,
                 "Süre (sn)": sure,
                 "Boyut (MB)": round(stat.st_size / 1024 / 1024, 2),
-                "Bozuk mu?": "EVET" if bozuk else "HAYIR",
+                "Bozuk mu?": "EVET" if bozuk else ("BİLİNMİYOR" if olculemedi else "HAYIR"),
                 "İlk Tespit Edilen Klasör": klasor
             })
 
@@ -281,8 +300,16 @@ def _analiz_worker():
                 ws.cell(r, c).fill = fill
         wb.save(excel_path)
 
+    mesaj = "Analiz tamamlandı.\nExcel raporu oluşturuldu."
+    if olculemeyen:
+        mesaj += (
+            f"\n\n⚠ {olculemeyen} video dosyası ölçülemedi: ffprobe bulunamadı "
+            "veya çalıştırılamadı.\nBu dosyalara DOKUNULMADI; raporda "
+            "\"Bozuk mu?\" sütununda BİLİNMİYOR yazıyor."
+        )
+
     safe_ui_call(lambda: status.set(f"Analiz tamamlandı ✅  {toplam} / {toplam} dosya  —  %100"))
-    safe_ui_call(lambda: messagebox.showinfo("Tamamlandı", "Analiz tamamlandı.\nExcel raporu oluşturuldu."))
+    safe_ui_call(lambda metin=mesaj: messagebox.showinfo("Tamamlandı", metin))
 
 # ================== UI ==================
 app = tk.Tk()
