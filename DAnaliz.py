@@ -50,14 +50,22 @@ def resolve_ffprobe_path():
     for path in search_paths:
         if os.path.exists(path):
             return path
-    return "ffprobe.exe"
+
+    # Son çare: sistem PATH'inde kurulu ffprobe. README script kullanımında
+    # bunu şart koşuyor; sabit "ffprobe.exe" döndürmek ise aşağıdaki
+    # varlık denetimine takılıp PATH kurulumunu görünmez kılıyordu.
+    for ad in ("ffprobe", "ffprobe.exe"):
+        bulunan = shutil.which(ad)
+        if bulunan:
+            return bulunan
+    return ""
 
 
 FFPROBE_PATH = resolve_ffprobe_path()
 
 # ================== VIDEO ANALİZ ==================
 def get_video_info(filepath):
-    if not os.path.exists(FFPROBE_PATH):
+    if not FFPROBE_PATH:
         return "", "", 0, True
 
     try:
