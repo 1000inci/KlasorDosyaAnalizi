@@ -28,10 +28,38 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-FFPROBE_PATH = resource_path(os.path.join("ffmpeg", "ffprobe.exe"))
+
+def resolve_ffprobe_path():
+    base_candidates = []
+    try:
+        if getattr(sys, "_MEIPASS", None):
+            base_candidates.append(sys._MEIPASS)
+    except Exception:
+        pass
+
+    base_candidates.extend([
+        os.path.abspath("."),
+        os.path.dirname(os.path.abspath(__file__)),
+    ])
+
+    search_paths = []
+    for base in base_candidates:
+        search_paths.append(os.path.join(base, "ffmpeg", "ffprobe.exe"))
+        search_paths.append(os.path.join(base, "ffprobe.exe"))
+
+    for path in search_paths:
+        if os.path.exists(path):
+            return path
+    return "ffprobe.exe"
+
+
+FFPROBE_PATH = resolve_ffprobe_path()
 
 # ================== VIDEO ANALİZ ==================
 def get_video_info(filepath):
+    if not os.path.exists(FFPROBE_PATH):
+        return "", "", 0, True
+
     try:
         cmd = [
             FFPROBE_PATH, "-v", "error",
@@ -41,14 +69,29 @@ def get_video_info(filepath):
             "-of", "default=noprint_wrappers=1:nokey=1",
             filepath
         ]
-        out = subprocess.check_output(cmd,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW).decode().splitlines()
-        codec, w, h, d = out[:4]
-        d = float(d)
-        if d <= 0:
+        run_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL, "text": True}
+        if os.name == "nt":
+            run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(cmd, check=False, **run_kwargs)
+        if result.returncode != 0:
+            return "", "", 0, True
+
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if len(lines) < 4:
+            return "", "", 0, True
+
+        codec, w, h, d = lines[:4]
+        try:
+            duration = float(d)
+        except ValueError:
             return codec, f"{w}x{h}", 0, True
-        return codec, f"{w}x{h}", round(d, 2), False
-    except Exception:
-        return "", "", "", True
+
+        if duration <= 0:
+            return codec, f"{w}x{h}", 0, True
+        return codec, f"{w}x{h}", round(duration, 2), False
+    except (OSError, ValueError, TypeError):
+        return "", "", 0, True
 
 # ================== HASH ==================
 def get_hash(path):
@@ -74,14 +117,23 @@ def raporu_ac():
         messagebox.showwarning("Uyarı", "Henüz oluşturulmuş bir rapor yok.")
 
 # ================== ANALİZ THREAD ==================
+def safe_ui_call(callback):
+    try:
+        if app.winfo_exists():
+            app.after(0, callback)
+    except Exception:
+        pass
+
+
 def analiz_et():
     threading.Thread(target=_analiz_worker, daemon=True).start()
+
 
 def _analiz_worker():
     global last_report_path
 
     if not selected_folder:
-        messagebox.showwarning("Uyarı", "Lütfen analiz edilecek bir klasör seçin.")
+        safe_ui_call(lambda: messagebox.showwarning("Uyarı", "Lütfen analiz edilecek bir klasör seçin."))
         return
 
     import pandas as pd
@@ -89,32 +141,30 @@ def _analiz_worker():
     from openpyxl.styles import PatternFill
 
     medya_rows = []
-    medya_disi_rows = []
     sorunlu_rows = []
     duplicate_rows = []
-    file_records = {}
+    hash_records = {}
 
     all_files = []
     for root, _, files in os.walk(selected_folder):
         if SORUNLU_KLASOR in root:
             continue
         for f in files:
+            if f.lower() == OUTPUT_EXCEL.lower():
+                continue
             all_files.append(os.path.join(root, f))
 
     toplam = len(all_files)
-    progress["maximum"] = toplam
-    progress["value"] = 0
-    status.set("Analiz başladı…")
+    safe_ui_call(lambda: progress.configure(maximum=toplam))
+    safe_ui_call(lambda: progress.configure(value=0))
+    safe_ui_call(lambda: status.set("Analiz başladı…"))
 
     bozuk_var = False
 
     for index, path in enumerate(all_files, start=1):
-        progress["value"] = index
-
-        yuzde = int((index / toplam) * 100)
-        status.set(f"{index} / {toplam} dosya analiz ediliyor  —  %{yuzde}")
-
-        app.update_idletasks()
+        safe_ui_call(lambda idx=index: progress.configure(value=idx))
+        yuzde = int((index / toplam) * 100) if toplam else 100
+        safe_ui_call(lambda text=f"{index} / {toplam} dosya analiz ediliyor  —  %{yuzde}": status.set(text))
 
         file = os.path.basename(path)
         ext = file.lower()
@@ -122,13 +172,13 @@ def _analiz_worker():
 
         try:
             stat = os.stat(path)
-        except:
+        except OSError:
             continue
 
         tur = "Diğer"
         codec = ""
         coz = ""
-        sure = ""
+        sure = 0
         bozuk = stat.st_size == 0
 
         is_video = ext.endswith(VIDEO_EXT)
@@ -147,13 +197,13 @@ def _analiz_worker():
         if duplicate_var.get():
             try:
                 h = get_hash(path)
-                file_records.setdefault(h, {
+                hash_records.setdefault(h, [])
+                hash_records[h].append({
                     "dosya": file,
                     "boyut": round(stat.st_size / 1024 / 1024, 2),
-                    "klasorler": []
+                    "klasor": klasor
                 })
-                file_records[h]["klasorler"].append(klasor)
-            except:
+            except OSError:
                 pass
 
         if bozuk:
@@ -168,7 +218,10 @@ def _analiz_worker():
             while os.path.exists(yeni_yol):
                 sayac += 1
                 yeni_yol = os.path.join(sorunlu_dir, f"{base}_{sayac}{ext2}")
-            shutil.move(path, yeni_yol)
+            try:
+                shutil.move(path, yeni_yol)
+            except OSError:
+                continue
 
             sorunlu_rows.append({
                 "Dosya Adı": file,
@@ -190,14 +243,14 @@ def _analiz_worker():
             })
 
     if duplicate_var.get():
-        for h, info in file_records.items():
-            if len(info["klasorler"]) > 1:
-                for k in info["klasorler"]:
+        for h, items in hash_records.items():
+            if len(items) > 1:
+                for item in items:
                     duplicate_rows.append({
-                        "Dosya Adı": info["dosya"],
-                        "Boyut (MB)": info["boyut"],
+                        "Dosya Adı": item["dosya"],
+                        "Boyut (MB)": item["boyut"],
                         "Hash": h,
-                        "Klasör": k
+                        "Klasör": item["klasor"]
                     })
 
     excel_path = os.path.join(selected_folder, OUTPUT_EXCEL)
@@ -220,8 +273,8 @@ def _analiz_worker():
                 ws.cell(r, c).fill = fill
         wb.save(excel_path)
 
-    status.set(f"Analiz tamamlandı ✅  {toplam} / {toplam} dosya  —  %100")
-    messagebox.showinfo("Tamamlandı", "Analiz tamamlandı.\nExcel raporu oluşturuldu.")
+    safe_ui_call(lambda: status.set(f"Analiz tamamlandı ✅  {toplam} / {toplam} dosya  —  %100"))
+    safe_ui_call(lambda: messagebox.showinfo("Tamamlandı", "Analiz tamamlandı.\nExcel raporu oluşturuldu."))
 
 # ================== UI ==================
 app = tk.Tk()
