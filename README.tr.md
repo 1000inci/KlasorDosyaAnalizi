@@ -30,13 +30,14 @@ detaylı analiz yapar ve sonuçları Excel raporu olarak üretir.
 Oluşturulan rapor, seçilen klasör içine kaydedilir ve aşağıdaki sayfaları içerebilir:
 
 - **MedyaDosyalari**
-  - Video / Görsel / Ses dosyaları
-- **MedyaDisiDosyalar** (isteğe bağlı)
-  - Medya dışı dosyalar
+  - Video / Görsel / Ses dosyaları (`Bozuk mu?` sütunu: EVET / HAYIR / BİLİNMİYOR)
 - **TekrarlananDosyalar**
-  - Aynı içeriğe sahip dosyalar (SHA‑256)
+  - Aynı içeriğe sahip dosyalar (SHA‑256). Yalnız duplicate analizi işaretliyse üretilir.
 - **SorunluDosyalar**
-  - Bozuk medya dosyaları
+  - Bozuk olduğu **ölçülerek** saptanan medya dosyaları
+
+Her sayfa yalnız içinde satır varsa oluşturulur; medya dışı dosyalar raporda
+listelenmez, yalnız tarama sayısına girer.
 
 ---
 
@@ -63,11 +64,18 @@ Python script olarak çalıştırıldığında, **video analiz özellikleri** is
 için **FFmpeg / ffprobe** gereklidir.
 
 - FFmpeg bilgisayarda kurulu olmalı **veya**
-- `ffprobe.exe` sistem PATH'inde bulunmalıdır
+- `ffprobe` / `ffprobe.exe` sistem PATH'inde bulunmalı **veya**
+- `ffprobe.exe` script'in yanında olmalı (`ffmpeg/` alt klasöründe de aranır)
 
 Aksi halde:
-- Görsel / ses / duplicate analizi çalışır
-- Video bilgileri boş veya kısıtlı olabilir
+- Görsel / ses / duplicate analizi normal çalışır
+- Video bilgileri (codec, çözünürlük, süre) boş kalır
+- Bu videolar **bozuk sayılmaz ve yerlerinden oynatılmaz**; raporda
+  `Bozuk mu?` sütununda **BİLİNMİYOR** yazar ve analiz sonunda kaç dosyanın
+  ölçülemediği bildirilir
+
+> ℹ️ "Ölçemedik" ile "bozuk" ayrı şeylerdir. Yalnız ffprobe'un okuyup
+> reddettiği ve 0 baytlık dosyalar `SorunluDosyalar` klasörüne taşınır.
 
 ### 🔹 EXE (.exe) ile kullanım (ÖNERİLEN)
 Release bölümünde sunulan **DAnaliz.exe**, FFmpeg’i **kendi içinde barındırır**.
